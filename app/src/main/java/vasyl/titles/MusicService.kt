@@ -99,11 +99,10 @@ class MusicService : Service() {
             }
 
             val unit = if (bandInt in 0..2) "MHz" else "KHz"
-
-            // Set the variables for your overlay
+            
             music_name = "$freqString $unit"
             author_name = bandText
-            state = true // Assuming if it updates, the radio is on
+            state = true
 
             sendData()
         }
