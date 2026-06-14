@@ -68,6 +68,10 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.fyt.launcher.music" />
+                <action android:name="com.qf.radio.update_action" />
+
+                <action android:name="com.qf.action.UPDATE_MEDIA_INFO" />
+                <action android:name="com.qf.action.UPDATE_MEDIA_STATE" />
             </intent-filter>
         </service>
         <receiver

@@ -85,6 +85,47 @@ class MusicService : Service() {
                 }
             }
         }
+        // --- K706 RADIO LOGIC ---
+        else if (action == "com.qf.radio.update_action") {
+            val bundle = intent.extras ?: Bundle()
+
+            val freqString = bundle.getString("com.qf.radio.update_action_key", "")
+            val bandInt = bundle.getInt("com.qf.radio.update_action_band_key", 0)
+
+            val bandText = if (bandInt in 0..2) {
+                "FM${bandInt + 1}" // FM1, FM2, FM3
+            } else {
+                "AM${(bandInt % 3) + 1}" // AM1, AM2
+            }
+
+            val unit = if (bandInt in 0..2) "MHz" else "KHz"
+
+            // Set the variables for your overlay
+            music_name = "$freqString $unit"
+            author_name = bandText
+            state = true // Assuming if it updates, the radio is on
+
+            sendData()
+        }
+        // --- K706 MEDIA INFO LOGIC (Title & Artist) ---
+        else if (action == "com.qf.action.UPDATE_MEDIA_INFO") {
+            val bundle = intent.extras ?: Bundle()
+
+            music_name = bundle.getString("media_title", "Unknown") ?: "Unknown"
+            author_name = bundle.getString("media_artist", "Unknown") ?: "Unknown"
+            TOTALMINUTES = bundle.getLong("media_duration", 0L)
+
+            sendData()
+        }
+        // --- NEW K706 MEDIA STATE LOGIC (Play/Pause & Time) ---
+        else if (action == "com.qf.action.UPDATE_MEDIA_STATE") {
+            val bundle = intent.extras ?: Bundle()
+
+            state = bundle.getBoolean("media_state", false)
+            CURMINUTES = bundle.getLong("media_position", 0L)
+
+            sendData()
+        }
 
         return super.onStartCommand(intent, flags, startId)
     }
