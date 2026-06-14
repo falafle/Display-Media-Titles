@@ -206,11 +206,19 @@ class NotificationListener : NotificationListenerService() {
                 addAction("titlesReceiver")
                 addAction("removeReceiver")
             }
+            val intentFilterK706 = IntentFilter().apply {
+                addAction("com.qf.radio.update_action")
+                addAction("com.qf.action.UPDATE_MEDIA_INFO")
+                addAction("com.qf.action.UPDATE_MEDIA_STATE")
+                addAction("com.qf.action.UPDATE_SEEKBAR_ACTION")
+            }
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     registerReceiver(fytReceiver, intentFilter, RECEIVER_EXPORTED)
+                    registerReceiver(k706Receiver, intentFilterK706, RECEIVER_EXPORTED)
                 } else {
                     registerReceiver(fytReceiver, intentFilter)
+                    registerReceiver(k706Receiver, intentFilterK706)
                 }
                 isReceiverRegistered = true
             } catch (e: Exception) {
@@ -259,7 +267,7 @@ class NotificationListener : NotificationListenerService() {
     @CallSuper
     override fun onDestroy() {  
         destroyed.set(true)
-        cleanupResources()  
+        cleanupResources()
         super.onDestroy()
     }
 
@@ -301,6 +309,7 @@ class NotificationListener : NotificationListenerService() {
         if (isReceiverRegistered) {
             try {
                 unregisterReceiver(fytReceiver)
+                unregisterReceiver(k706Receiver)
                 isReceiverRegistered = false
             } catch (e: IllegalArgumentException) {
                 Log.w("NotificationListener", "Receiver already unregistered: ${e.message}")
@@ -389,7 +398,74 @@ class NotificationListener : NotificationListenerService() {
                 updateWidgetPlayState(context, false)
             }
         }
-    }    
+    }
+
+    private val k706Receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val action = intent.action ?: return
+
+            when (action) {
+                "com.qf.radio.update_action" -> {
+                    val bundle = intent.extras ?: Bundle()
+
+                    val freqString = bundle.getString("com.qf.radio.update_action_key", "") ?: ""
+                    val rdsName = bundle.getString("com.qf.radio.update_action_name_key", "") ?: ""
+                    val bandInt = bundle.getInt("com.qf.radio.update_action_band_key", 0)
+
+                    val bandText = if (bandInt in 0..2) "FM${bandInt + 1}" else "AM${(bandInt % 3) + 1}"
+                    val unit = if (bandInt in 0..2) "MHz" else "KHz"
+
+                    MusicService.music_name = if (rdsName.isNotEmpty()) {
+                        rdsName
+                    } else {
+                        "$freqString $unit"
+                    }
+
+                    MusicService.author_name = bandText
+                    MusicService.state = true
+                    sendToWidgets(context)
+                }
+
+                "com.qf.action.UPDATE_MEDIA_INFO" -> {
+                    val bundle = intent.extras ?: Bundle()
+                    MusicService.music_name = bundle.getString("media_title", "Unknown") ?: "Unknown"
+                    MusicService.author_name = bundle.getString("media_artist", "Unknown") ?: "Unknown"
+                    MusicService.TOTALMINUTES = bundle.getLong("media_duration", 0L)
+                    sendToWidgets(context)
+                }
+
+                "com.qf.action.UPDATE_MEDIA_STATE" -> {
+                    val bundle = intent.extras ?: Bundle()
+                    MusicService.state = bundle.getBoolean("media_state", false)
+                    MusicService.CURMINUTES = bundle.getLong("media_position", 0L)
+                    sendToWidgets(context)
+                }
+
+                "com.qf.action.UPDATE_SEEKBAR_ACTION" -> {
+                    val bundle = intent.extras ?: Bundle()
+                    MusicService.CURMINUTES = bundle.getInt("playtime", 0).toLong()
+                    MusicService.TOTALMINUTES = bundle.getInt("durtime", 0).toLong()
+                    sendToWidgets(context)
+                }
+            }
+        }
+    }
+
+    private fun sendToWidgets(context: Context) {
+        val updateIntent = Intent(MusicService.TITLES_RECEIVER)
+        val bundle = Bundle().apply {
+            putBoolean(MusicService.PLAY_STATE, MusicService.state)
+            putString(MusicService.TITLE, MusicService.music_name)
+            putString(MusicService.PLAY_ARTIST, MusicService.author_name)
+            putString(MusicService.PLAY_ALBUM, MusicService.album)
+            putString(MusicService.PLAY_PATH, MusicService.music_path)
+            putString(MusicService.PLAY_SOURCE, MusicService.SOURCE)
+            putLong(MusicService.PLAY_TOTALMINUTES, MusicService.TOTALMINUTES)
+            putLong(MusicService.PLAY_CURMINUTES, MusicService.CURMINUTES)
+        }
+        updateIntent.putExtras(bundle)
+        context.sendBroadcast(updateIntent)
+    }
 
     private fun imContextSystem(context: Context): Boolean {
         val pm = context.packageManager
