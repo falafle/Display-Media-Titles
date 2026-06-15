@@ -130,6 +130,9 @@ class NotificationListener : NotificationListenerService() {
     var prevCurFyt: Long = 0
     var prevMinutes: Long = 0
     var shouldExclude = false
+    var mediaControllerAllowed: Boolean = true
+
+    private val resetMediaControllerAllowed = Runnable { mediaControllerAllowed = true }
     
     companion object {
         var source: String = ""
@@ -208,15 +211,13 @@ class NotificationListener : NotificationListenerService() {
             }
             val intentFilterK706 = IntentFilter().apply {
                 addAction("com.qf.radio.update_action")
-                addAction("com.qf.action.UPDATE_MEDIA_INFO")
-                addAction("com.qf.action.UPDATE_MEDIA_STATE")
-                addAction("com.qf.action.UPDATE_SEEKBAR_ACTION")
-                addAction("com.qf.action.UPDATE_MEDIA_INFO_SYNC")
+                addAction("com.qf.action.BT.MUSIC.INFO")
+                addAction("com.qf.musicplayer.action.UPDATE_ACTION")
             }
+
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     registerReceiver(fytReceiver, intentFilter, RECEIVER_EXPORTED)
-                    registerReceiver(k706Receiver, intentFilterK706, RECEIVER_EXPORTED)
                 } else {
                     registerReceiver(fytReceiver, intentFilter)
                     registerReceiver(k706Receiver, intentFilterK706)
@@ -406,6 +407,7 @@ class NotificationListener : NotificationListenerService() {
             val action = intent.action ?: return
 
             when (action) {
+                // 1. K706 RADIO
                 "com.qf.radio.update_action" -> {
                     val bundle = intent.extras ?: Bundle()
 
@@ -418,88 +420,132 @@ class NotificationListener : NotificationListenerService() {
 
                     val finalName = if (rdsName.isNotEmpty()) rdsName else "$freqString $unit"
 
-                    // 1. Update the local variables for the Floating Window
                     this@NotificationListener.musicName = finalName
                     this@NotificationListener.authorName = bandText
                     this@NotificationListener.fytState = true
 
-                    // 2. Update the static variables for the Home Screen Widgets
                     MusicService.music_name = finalName
                     MusicService.author_name = bandText
                     MusicService.state = true
                     sendToWidgets(context)
 
-                    // 3. Force the Floating Window to pop up and redraw!
+                    this@NotificationListener.mediaControllerAllowed = false
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        this@NotificationListener.mediaControllerAllowed = true
+                    }, 2000)
+
                     setStatus(1)
                 }
 
-                "com.qf.action.UPDATE_MEDIA_INFO" -> {
-                    val bundle = intent.extras ?: Bundle()
+                // 2. K706 LOCAL MUSIC PLAYER
+                "com.qf.musicplayer.action.UPDATE_ACTION" -> {
+                    try {
+                        intent.setExtrasClassLoader(com.qf.musicplayer.bean.MusicInfoData::class.java.classLoader)
+                        val musicInfo = intent.getParcelableExtra<com.qf.musicplayer.bean.MusicInfoData>("com.qf.musicplayer.action.UPDATE_ACTION_musicinfo")
 
-                    val title = bundle.getString("media_title", "Unknown") ?: "Unknown"
-                    val artist = bundle.getString("media_artist", "Unknown") ?: "Unknown"
-                    val duration = bundle.getLong("media_duration", 0L)
+                        if (musicInfo != null) {
+                            val title = musicInfo.name ?: "Unknown"
+                            val artist = musicInfo.artist ?: "Unknown"
+                            val status = musicInfo.curPlayStatus // 17 = Pause/Stop, 18 = Play
+                            val duration = musicInfo.totalTime.toLong()
+                            val position = musicInfo.currTime.toLong()
 
-                    // 1. Update the local variables for the Floating Window
-                    this@NotificationListener.musicName = title
-                    this@NotificationListener.authorName = artist
-                    this@NotificationListener.fytTotalMinutes = duration
-                    this@NotificationListener.fytState = true
+                            this@NotificationListener.musicName = title
+                            this@NotificationListener.authorName = artist
+                            this@NotificationListener.fytTotalMinutes = duration
+                            this@NotificationListener.fytCurMinutes = position
+                            this@NotificationListener.fytState = (status == 18)
 
-                    // 2. Update the static variables for the Home Screen Widgets
-                    MusicService.music_name = title
-                    MusicService.author_name = artist
-                    MusicService.TOTALMINUTES = duration
-                    sendToWidgets(context)
+                            MusicService.music_name = title
+                            MusicService.author_name = artist
+                            MusicService.TOTALMINUTES = duration
+                            MusicService.CURMINUTES = position
+                            MusicService.state = (status == 18)
+                            sendToWidgets(context)
 
-                    // 3. Force the Floating Window to pop up and redraw!
-                    setStatus(1)
-                }
+                            if (status == 18) {
+                                this@NotificationListener.mediaControllerAllowed = false
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    this@NotificationListener.mediaControllerAllowed = true
+                                }, 2000)
 
-                "com.qf.action.UPDATE_MEDIA_STATE" -> {
-                    val bundle = intent.extras ?: Bundle()
-                    val isPlaying = bundle.getBoolean("media_state", false)
-                    val pos = bundle.getLong("media_position", 0L)
-
-                    this@NotificationListener.fytCurMinutes = pos
-                    MusicService.state = isPlaying
-                    MusicService.CURMINUTES = pos
-                    sendToWidgets(context)
-
-                    // If it plays, show UI. If it pauses, hide the UI.
-                    if (isPlaying) {
-                        this@NotificationListener.fytState = true
-                        setStatus(1)
-                    } else {
-                        this@NotificationListener.fytState = false
-                        removeWindowView()
-                        updateWidgetPlayState(context, false)
+                                setStatus(1)
+                            } else {
+                                // Only hide the UI if Spotify isn't actively playing
+                                if (this@NotificationListener.currentState != PlaybackState.STATE_PLAYING) {
+                                    removeWindowView()
+                                }
+                                updateWidgetPlayState(context, false)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("NotificationListener", "Failed to parse MusicInfoData", e)
                     }
                 }
 
-                "com.qf.action.UPDATE_SEEKBAR_ACTION" -> {
-                    val bundle = intent.extras ?: Bundle()
-                    val pos = bundle.getInt("playtime", 0).toLong()
-                    val dur = bundle.getInt("durtime", 0).toLong()
+                // 3. K706 BLUETOOTH MUSIC
+                "com.qf.action.BT.MUSIC.INFO" -> {
+                    val title = intent.getStringExtra("songName") ?: "Unknown"
+                    val artist = intent.getStringExtra("songSinger") ?: "Unknown"
 
-                    this@NotificationListener.fytCurMinutes = pos
-                    this@NotificationListener.fytTotalMinutes = dur
-                    MusicService.CURMINUTES = pos
-                    MusicService.TOTALMINUTES = dur
+                    this@NotificationListener.musicName = title
+                    this@NotificationListener.authorName = artist
+                    this@NotificationListener.fytState = true
 
+                    MusicService.music_name = title
+                    MusicService.author_name = artist
+                    MusicService.state = true
                     sendToWidgets(context)
-                }
 
-                "com.qf.action.UPDATE_MEDIA_INFO_SYNC" -> {
-                    val syncIntent = Intent("com.qf.action.UPDATE_MEDIA_INFO")
-                    syncIntent.putExtra("media_title", MusicService.music_name)
-                    syncIntent.putExtra("media_artist", MusicService.author_name)
-                    syncIntent.putExtra("media_state", MusicService.state)
-                    context.sendBroadcast(syncIntent)
+                    this@NotificationListener.mediaControllerAllowed = false
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        this@NotificationListener.mediaControllerAllowed = true
+                    }, 2000)
+
+                    setStatus(1)
                 }
             }
         }
+    }
+
+    private fun handleK706Playback(
+        context: Context,
+        title: String,
+        artist: String,
+        isPlaying: Boolean,
+        duration: Long = 0L,
+        position: Long = 0L
+    ) {
+        this.musicName = title
+        this.authorName = artist
+        this.fytTotalMinutes = duration
+        this.fytCurMinutes = position
+        this.fytState = isPlaying
+
+        MusicService.music_name = title
+        MusicService.author_name = artist
+        MusicService.TOTALMINUTES = duration
+        MusicService.CURMINUTES = position
+        MusicService.state = isPlaying
+
+        sendToWidgets(context)
+
+        if (isPlaying) {
+            // Block ghost native media updates (debounce)
+            mediaControllerAllowed = false
+            // Remove any pending callbacks so multiple rapid taps don't stack timers
+            handler?.removeCallbacks(resetMediaControllerAllowed)
+            handler?.postDelayed(resetMediaControllerAllowed, 2000)
+
+            setStatus(1)
+        } else {
+            // Only hide the UI if a native app (like Spotify) isn't actively playing
+            if (currentState != PlaybackState.STATE_PLAYING) {
+                removeWindowView()
+            }
+            updateWidgetPlayState(context, false)
         }
+    }
 
     private fun sendToWidgets(context: Context) {
         val updateIntent = Intent(MusicService.TITLES_RECEIVER)
