@@ -1,4 +1,4 @@
-# Fork of Display Media Titles for FYT 7862/8581 modified to use with ROCO k706
+# Fork of Display Media Titles for FYT 7862/8581 modified to use with ROCO k706 platform (Hizpo, Ossuret)
 
 Changes:
 
