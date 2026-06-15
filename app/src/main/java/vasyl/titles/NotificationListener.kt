@@ -130,7 +130,15 @@ class NotificationListener : NotificationListenerService() {
     var prevCurFyt: Long = 0
     var prevMinutes: Long = 0
     var shouldExclude = false
-    
+
+    // K706 Source Caches
+    private var cachedRadioTitle = "FM Radio"
+    private var cachedRadioArtist = ""
+    private var cachedMusicTitle = "Local Music"
+    private var cachedMusicArtist = ""
+    private var cachedBtTitle = "Bluetooth Music"
+    private var cachedBtArtist = ""
+
     companion object {
         var source: String = ""
         var activeControllerPackage = ""
@@ -206,12 +214,22 @@ class NotificationListener : NotificationListenerService() {
                 addAction("titlesReceiver")
                 addAction("removeReceiver")
             }
+            val intentFilterK706 = IntentFilter().apply {
+                addAction("com.qf.radio.update_action")
+                addAction("com.qf.action.BT.MUSIC.INFO")
+                addAction("com.qf.musicplayer.action.UPDATE_ACTION")
+                addAction("com.qf.action.audio_focus")
+            }
+
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(fytReceiver, intentFilter, RECEIVER_EXPORTED)
-                } else {
-                    registerReceiver(fytReceiver, intentFilter)
-                }
+                registerReceiver(k706Receiver, intentFilterK706)
+
+//                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+//                    registerReceiver(fytReceiver, intentFilter, RECEIVER_EXPORTED)
+//                } else {
+//                    registerReceiver(fytReceiver, intentFilter)
+//                    registerReceiver(k706Receiver, intentFilterK706)
+//                }
                 isReceiverRegistered = true
             } catch (e: Exception) {
                 Log.e("NotificationListener", "Error registering receiver: ${e.message}")
@@ -259,7 +277,7 @@ class NotificationListener : NotificationListenerService() {
     @CallSuper
     override fun onDestroy() {  
         destroyed.set(true)
-        cleanupResources()  
+        cleanupResources()
         super.onDestroy()
     }
 
@@ -301,6 +319,7 @@ class NotificationListener : NotificationListenerService() {
         if (isReceiverRegistered) {
             try {
                 unregisterReceiver(fytReceiver)
+                unregisterReceiver(k706Receiver)
                 isReceiverRegistered = false
             } catch (e: IllegalArgumentException) {
                 Log.w("NotificationListener", "Receiver already unregistered: ${e.message}")
@@ -389,7 +408,192 @@ class NotificationListener : NotificationListenerService() {
                 updateWidgetPlayState(context, false)
             }
         }
-    }    
+    }
+
+    private val k706Receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val action = intent.action ?: return
+
+            when (action) {
+                // 1. K706 AUDIO FOCUS
+                "com.qf.action.audio_focus" -> {
+                    val callingPackage = intent.getStringExtra("callingPackageName") ?: ""
+                    val streamType = intent.getIntExtra("streamType", 3)
+
+                    if (callingPackage.isNotEmpty() && streamType == 3) {
+                        activeControllerPackage = callingPackage
+
+                        val k706CachedData = when {
+                            callingPackage.startsWith("com.android.fmradio") -> cachedRadioTitle to cachedRadioArtist
+                            callingPackage.startsWith("com.qf.musicplayer") -> cachedMusicTitle to cachedMusicArtist
+                            callingPackage.startsWith("com.qf.bluetooth") -> cachedBtTitle to cachedBtArtist
+                            else -> null
+                        }
+
+                        if (k706CachedData != null) {
+                            if (currentState == PlaybackState.STATE_PLAYING || currentState == PlaybackState.STATE_STOPPED) {
+                                removeWindowView()
+                            }
+
+                            val (cacheTitle, cacheArtist) = when {
+                                callingPackage.startsWith("com.android.fmradio") -> cachedRadioTitle to cachedRadioArtist
+                                callingPackage.startsWith("com.qf.musicplayer") -> cachedMusicTitle to cachedMusicArtist
+                                callingPackage.startsWith("com.qf.bluetooth") -> cachedBtTitle to cachedBtArtist
+                                else -> "Unknown" to ""
+                            }
+
+                            if (!this@NotificationListener.fytState) {
+                                handleK706Playback(context, cacheTitle, cacheArtist, isPlaying = true)
+                            }
+                        } else {
+                            if (this@NotificationListener.fytState) {
+                                this@NotificationListener.fytState = false
+                                fytSet = false
+                                removeWindowView()
+                                updateWidgetPlayState(context, false)
+
+                                // Force SessionListener to evaluate and draw the standard app immediately
+                                this@NotificationListener.handler?.postDelayed({
+                                    this@NotificationListener.checkActiveSessions()
+                                    this@NotificationListener.callback.set()
+                                }, 500)
+                            }
+                        }
+                    }
+                }
+
+                // 2. K706 RADIO
+                "com.qf.radio.update_action" -> {
+                    val bundle = intent.extras ?: Bundle()
+                    val freqString = bundle.getString("com.qf.radio.update_action_key", "") ?: ""
+                    val rdsName = bundle.getString("com.qf.radio.update_action_name_key", "") ?: ""
+                    val bandInt = bundle.getInt("com.qf.radio.update_action_band_key", 0)
+
+                    val bandText = if (bandInt in 0..2) "FM${bandInt + 1}" else "AM${(bandInt % 3) + 1}"
+                    val unit = if (bandInt in 0..2) "MHz" else "KHz"
+                    val finalName = if (rdsName.isNotEmpty()) rdsName else "$freqString $unit"
+
+                    cachedRadioTitle = finalName
+                    cachedRadioArtist = bandText
+
+                    if (activeControllerPackage.startsWith("com.android.fmradio")) {
+                        handleK706Playback(context, finalName, bandText, isPlaying = true)
+                    }
+                }
+
+                // 3. K706 LOCAL MUSIC PLAYER
+                "com.qf.musicplayer.action.UPDATE_ACTION" -> {
+                    try {
+                        intent.setExtrasClassLoader(com.qf.musicplayer.bean.MusicInfoData::class.java.classLoader)
+                        val musicInfo = intent.getParcelableExtra<com.qf.musicplayer.bean.MusicInfoData>("com.qf.musicplayer.action.UPDATE_ACTION_musicinfo")
+
+                        if (musicInfo != null) {
+                            var title = musicInfo.name ?: "Unknown"
+                            val artist = musicInfo.artist ?: "Unknown"
+                            val status = musicInfo.curPlayStatus // 17 = Pause/Stop, 18 = Play
+                            val duration = musicInfo.totalTime.toLong()
+                            val position = musicInfo.currTime.toLong()
+                            val filePath = musicInfo.path
+                            val isPlaying = status == 18
+
+                            if (title.isBlank() || title.equals("Unknown", ignoreCase = true) || title.equals("null", ignoreCase = true)) {
+                                if (!filePath.isNullOrEmpty()) {
+                                    val file = File(filePath)
+                                    val fileName = file.name
+                                    title = if (fileName.contains(".")) fileName.substring(0, fileName.lastIndexOf(".")) else fileName
+                                } else {
+                                    title = "Unknown"
+                                }
+                            }
+
+                            cachedMusicTitle = title
+                            cachedMusicArtist = artist
+
+                            if (activeControllerPackage.startsWith("com.qf.musicplayer") || !isPlaying) {
+                                handleK706Playback(context, title, artist, isPlaying, duration, position)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("NotificationListener", "Failed to parse MusicInfoData", e)
+                    }
+                }
+
+                // 4. K706 BLUETOOTH MUSIC
+                "com.qf.action.BT.MUSIC.INFO" -> {
+                    val title = intent.getStringExtra("songName") ?: "Unknown"
+                    val artist = intent.getStringExtra("songSinger") ?: "Unknown"
+
+                    cachedBtTitle = title
+                    cachedBtArtist = artist
+
+                    if (activeControllerPackage.startsWith("com.qf.bluetooth")) {
+                        handleK706Playback(context, title, artist, isPlaying = true)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleK706Playback(
+        context: Context,
+        title: String,
+        artist: String,
+        isPlaying: Boolean,
+        duration: Long = 0L,
+        position: Long = 0L
+    ) {
+        val isMetadataOrStateChanged = this.musicName != title ||
+                this.authorName != artist ||
+                this.fytState != isPlaying
+
+        this.musicName = title
+        this.authorName = artist
+        this.fytTotalMinutes = duration
+        this.fytCurMinutes = position
+        this.fytState = isPlaying
+
+        MusicService.music_name = title
+        MusicService.author_name = artist
+        MusicService.TOTALMINUTES = duration
+        MusicService.CURMINUTES = position
+        MusicService.state = isPlaying
+
+        sendToWidgets(context)
+
+        if (!isMetadataOrStateChanged) return
+
+        if (isPlaying) {
+            if (currentState == PlaybackState.STATE_PLAYING || currentState == PlaybackState.STATE_STOPPED) {
+                removeWindowView()
+            }
+
+            fytSet = true
+            setStatus(1)
+
+        } else {
+            fytSet = false
+            if (currentState != PlaybackState.STATE_PLAYING) {
+                removeWindowView()
+            }
+            updateWidgetPlayState(context, false)
+        }
+    }
+
+    private fun sendToWidgets(context: Context) {
+        val updateIntent = Intent(MusicService.TITLES_RECEIVER)
+        val bundle = Bundle().apply {
+            putBoolean(MusicService.PLAY_STATE, MusicService.state)
+            putString(MusicService.TITLE, MusicService.music_name)
+            putString(MusicService.PLAY_ARTIST, MusicService.author_name)
+            putString(MusicService.PLAY_ALBUM, MusicService.album)
+            putString(MusicService.PLAY_PATH, MusicService.music_path)
+            putString(MusicService.PLAY_SOURCE, MusicService.SOURCE)
+            putLong(MusicService.PLAY_TOTALMINUTES, MusicService.TOTALMINUTES)
+            putLong(MusicService.PLAY_CURMINUTES, MusicService.CURMINUTES)
+        }
+        updateIntent.putExtras(bundle)
+        context.sendBroadcast(updateIntent)
+    }
 
     private fun imContextSystem(context: Context): Boolean {
         val pm = context.packageManager
@@ -516,26 +720,38 @@ class NotificationListener : NotificationListenerService() {
                         service.songCur = service.meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
                     }
                 }
-                if (!service.songCur.equals(service.settings!!.getString("songPrev", "prev")) 
-                    || service.settings!!.getInt("prevState", PlaybackState.STATE_STOPPED) == PlaybackState.STATE_STOPPED 
+                if (!service.songCur.equals(service.settings!!.getString("songPrev", "prev"))
+                    || service.settings!!.getInt("prevState", PlaybackState.STATE_STOPPED) == PlaybackState.STATE_STOPPED
                     || service.settings!!.getInt("prevState", PlaybackState.STATE_STOPPED) == PlaybackState.STATE_PAUSED
                     || service.settings!!.getInt("prevState", PlaybackState.STATE_STOPPED) == PlaybackState.STATE_BUFFERING) {
+
                     service.settings!!.edit {
                         putString("songPrev", service.songCur)
                         putInt("prevState", service.currentState!!)
                     }
-                    service.removeWindowView()
+
+                    if (!service.fytState) {
+                        service.removeWindowView()
+                    }
+
                     activeControllerPackage = (service.mediaController?.getPackageName()).toString()
                     service.shouldExclude = service.containsExcludedMediaPackage(activeControllerPackage)
+
                     if (dur != 0.toLong() && !service.started) { // not live
                         service.musicState = "true"
-                        service.setStatus(2) 
+
+                        if (!service.fytState) {
+                            service.setStatus(2)
+                        }
                     } else { // live
                         if (Helpers.counter == service.count && !service.started) {
                             Helpers.counter++
                             service.musicState = "true"
                             service.curMinutes = 0
-                            service.setStatus(2)                 
+
+                            if (!service.fytState) {
+                                service.setStatus(2)
+                            }
                         }
                     }
                 }
