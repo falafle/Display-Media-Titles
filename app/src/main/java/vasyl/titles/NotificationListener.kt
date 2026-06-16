@@ -509,7 +509,7 @@ class NotificationListener : NotificationListenerService() {
                             cachedMusicTitle = title
                             cachedMusicArtist = artist
 
-                            if (activeControllerPackage.startsWith("com.qf.musicplayer") || !isPlaying) {
+                            if (activeControllerPackage.startsWith("com.qf.musicplayer")) {
                                 handleK706Playback(context, title, artist, isPlaying, duration, position)
                             }
                         }
