@@ -318,7 +318,6 @@ class NotificationListener : NotificationListenerService() {
     private fun safeUnregisterReceiver() {
         if (isReceiverRegistered) {
             try {
-                unregisterReceiver(fytReceiver)
                 unregisterReceiver(k706Receiver)
                 isReceiverRegistered = false
             } catch (e: IllegalArgumentException) {
@@ -336,76 +335,6 @@ class NotificationListener : NotificationListenerService() {
                 Log.w("NotificationListener", "Session listener already removed or not registered: ${e.message}")
             } catch (e: Exception) {
                 Log.e("NotificationListener", "Error removing session listener: ${e.message}")
-            }
-        }
-    } 
-
-    private val fytReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == "titlesReceiver") {
-                val retriever = MediaMetadataRetriever()
-                val bundle: Bundle? = intent.extras!!
-                fytState = bundle!!.getBoolean("play_state", false)
-                path = bundle.getString("play_path") ?: ""
-                fytCurMinutes = bundle.getLong("play_cur", 0L)
-                val file = File(path!!)
-                if (file.exists()) {
-                    try {
-                        FileInputStream(file).use { fis ->
-                            retriever.setDataSource(fis.fd, 0, file.length())
-                        }      
-                    } catch (e: IllegalArgumentException) {
-                        e.printStackTrace()
-                        retriever.setDataSource(path!!)
-                    } finally {
-                        musicName = retriever?.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-                        authorName = retriever?.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                        album = retriever?.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).toString()
-                        retriever?.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            ?.let { fytTotalMinutes = it.toLong() }
-
-                        if (musicNamePrev != musicName) {
-                            musicNamePrev = musicName.toString()
-                            prevCurFyt = 0
-                        }
-
-                        val filename = file.getName()
-                        if (filename.isNotEmpty() && filename.contains(".")) {
-                            pathName = filename.substring(0, filename.lastIndexOf("."))
-                        }
-
-                        if (currentState == PlaybackState.STATE_PLAYING) {
-                            mediaController?.transportControls?.pause()
-                        }
-
-                        if (musicName != null && musicName!!.isNotEmpty() && musicName != "Unknown" && musicName != "null" && song != null && song != musicName && song != pathName!!) {
-                            fytSet = false
-                        } 
-                        if(fytState && !fytSet && fytAllowed && musicName != null && musicName!!.isNotEmpty() && musicName != "Unknown" && musicName != "null") {    
-                            fytSet = true
-                            if (currentState == PlaybackState.STATE_PLAYING || currentState == PlaybackState.STATE_STOPPED) {
-                                removeWindowView()
-                            }
-                            shouldExclude = containsExcludedMediaPackage("com.syu.music")
-                            updateWidgetPlayState(context, true)
-                            setStatus(1)
-                        } 
-                        if (!fytState && fytSet) {
-                            if (currentState != PlaybackState.STATE_PLAYING || currentState == PlaybackState.STATE_STOPPED) {
-                                removeWindowView()
-                            }
-                            fytSet = false
-                            updateWidgetPlayState(context, false)
-                        }  
-                        retriever.release()                  
-                    }
-                }
-            } else if (intent.action == "removeReceiver") {
-                if (currentState != PlaybackState.STATE_PLAYING || currentState == PlaybackState.STATE_STOPPED) {
-                    removeWindowView()
-                }
-                fytSet = false
-                updateWidgetPlayState(context, false)
             }
         }
     }

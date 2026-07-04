@@ -32,6 +32,14 @@
 -keep class * extends androidx.glance.appwidget.GlanceAppWidget
 -keep class * extends androidx.glance.appwidget.GlanceAppWidgetReceiver
 
+# Keep the exact class name and all fields for the K706 Music Parcelable
+-keep class com.qf.musicplayer.bean.MusicInfoData { *; }
+
+# Ensure standard Android Parcelable CREATOR fields are never stripped
+-keepclassmembers class * implements android.os.Parcelable {
+    public static final android.os.Parcelable$Creator CREATOR;
+}
+
 # Keep your widget classes
 -keep class vasyl.titles.widget.** { *; }
 
